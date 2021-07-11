@@ -7,13 +7,12 @@ const server = http.createServer(app);
 
 const db = 'mongodb+srv://cryptoteka:cryptoteka12312@walletcluster.jpvj7.mongodb.net/<dbname>?retryWrites=true&w=majority';
 
-
-const Wallet = require('./models/WalletModel')
-
+const Notification = require('./models/NotificationModel')
 
 //controllers
 const epochController = require('./controllers/epochController');
-const walletController = require('./controllers/walletController')
+const ethWalletController = require('./controllers/ethWalletController')
+const rewardController = require('./controllers/rewardController')
 
 
 
@@ -35,159 +34,143 @@ const io = require("socket.io")(server, {
 
 io.on('connection', socket => {
 
-
-    socket.on('login', secretPhrase => {
-        walletController.getAllWalletData(secretPhrase)
+   
+    //login
+    socket.on('ethLogin', addr => {
+        ethWalletController.getWalletDetails(addr)
             .then(data => {
-                socket.emit('loginSuccess', data);
-            })
-    })
-
-    socket.on('placeBidBlue', data => {
-        console.log(data);
-        epochController.voteForBlueTeam(data.id, data.amount)
-            .then(result => {
-
-
-                walletController.deductWalletBalance(data.id, data.amount)
-                    .then(walletUpdated => {
-
-
-                        walletController.getAllWalletData(data.secretPhrase)
-                        .then(data => {
-                            socket.emit('bidSuccess', data);
-                            io.emit('updateEpoch', data.currentEpoch)
-                        })
-
-
-                    
-                    })
-           
-               
-
-
-
-                
-            })
-    })
-
-    socket.on('placeBidRed', data => {
-        epochController.voteForRedTeam(data.id, data.amount)
-            .then(result => {
-
-
-                walletController.deductWalletBalance(data.id, data.amount)
-                    .then(walletUpdated => {
-                        walletController.getAllWalletData(data.secretPhrase)
-                        .then(data => {
-                            socket.emit('bidSuccess', data);
-                            io.emit('updateEpoch', data.currentEpoch)
-                        })
-                    })
-
-
-
-           
-                
-
-
-
-                
+                socket.emit('ethLoginSuccess', data)
             })
     })
 
 
-
-    socket.on('getReward', id => {
-        walletController.getWalletRewardBnb(id)
-            .then(reward => {
-                Wallet.findOne({_id: id})
-                    .then(wallet => {
-                        const data = {
-                            reward,
-                            versusAmount: wallet.versusAmount
-                        }
-                        socket.emit('updateReward', data)
-                    })
-               
-            })
-    })
-
-    socket.on('generateWallet', data => {
-        walletController.createWallet()
-            .then(wallet => {
-                socket.emit('walletGenerated', wallet)
-            })
-    })
-
+    //claim reward
     socket.on('claimReward', data => {
-        walletController.transferRewardToWallet(data.id)
+        if(data.coin === "bnb"){
+            rewardController.claimBnbReward(data.addr)
+                .then(res => {
+                    socket.emit('claimRewardSucces', 'bnb')
+                })
+        }
+        if(data.coin === "versus"){
+            rewardController.claimVersusReward(data.addr)
             .then(res => {
-                walletController.getAllWalletData(data.secretPhrase)
-                    .then(result => {
-                        socket.emit('rewardCollected', result)
-                    })
+                socket.emit('claimRewardSucces', 'versus')
             })
+        }  
     })
 
+    //Vote for red
+    socket.on('voteForRed', data => {
+    const addrSting = data.addr;
+    const shortAddr = `${addrSting.substring(0,6)}...${addrSting.substring(38,42)}`;
+    const amount = data.amount;
+       epochController.createVote(data.addr, data.amount, 'red')
+        .then(result => {
+            ethWalletController.getWalletDetails(data.addr)
+                .then(data => {
+                    socket.emit('updateWallet', data)
+                    epochController.getCurrentEpoch()
+                        .then(currentEpoch => {
+                            
+
+                            epochController.getEpochNumber()
+                                .then(epochNumber => {
+                                    const newNotification = new Notification({
+                                        title: `New Vote`,
+                                        text: `User ${shortAddr} voted ${amount.toFixed(2)} BNB for Red Team`
+                                    })
+        
+                                    newNotification.save()
+                                        .then(savedNotification => {
+                                            epochController.getNotifications()
+                                            .then(notifications => {
+                                                io.emit('updateEpoch', currentEpoch)
+                                                io.emit('updateNotifications', notifications)
+                                            })
+                                        })
+                                })
+
+                            
 
 
+                        })
+                })
+        })
+    })
 
+      //Vote for Blue
+      socket.on('voteForBlue', data => {
+        const addrSting = data.addr;
+        const shortAddr = `${addrSting.substring(0,6)}...${addrSting.substring(38,42)}`;
+        const amount = data.amount;
+        epochController.createVote(data.addr, data.amount, 'blue')
+         .then(result => {
+             ethWalletController.getWalletDetails(data.addr)
+                 .then(data => {
+                     socket.emit('updateWallet', data)
+                     epochController.getCurrentEpoch()
+                        .then(currentEpoch => {
+                            epochController.getEpochNumber()
+                            .then(epochNumber => {
+                                const newNotification = new Notification({
+                                    title: `New Vote`,
+                                    text: `User ${shortAddr} voted ${amount.toFixed(2)} BNB for Blue Team`
+                                })
+    
+                                newNotification.save()
+                                    .then(savedNotification => {
+                                        epochController.getNotifications()
+                                            .then(notifications => {
+                                                io.emit('updateEpoch', currentEpoch)
+                                                io.emit('updateNotifications', notifications)
+                                            })
+                                        
+                                    })
+                            })
+                           
+                        })
+                 })
+         })
+     })
+ 
+
+     socket.on('updateWalletTrigger', addr => {
+        ethWalletController.getWalletDetails(addr)
+            .then(data => {
+                socket.emit('updateWallet', data)
+            })
+    })
 
 })
 
 
 
-const epochStop = () => {
-    epochController.finishEpoch()
-        .then(winner => {
-            epochController.createNewEpoch()
-                .then(res => {
-                    epochController.transferLiquidityToNextEpoch(winner)
-                        .then(res2 => {
-                            epochController.getCurrentEpoch()
-                                .then(currentEpoch => {
 
-
-                                    epochController.getEpochNumber()
-                                        .then(epochNumber => {
-
-                                            const data = {
-                                                winner,
-                                                currentEpoch,
-                                                epochNumber
-                                            }
-        
-                                         
-        
-                                            io.emit('epochRestart', data)
-
-                                        })
-
-                                    
-
-
-
-
-                                })
-                        })
+const restartEpochTrigger = () => {
+    epochController.restartEpoch()
+        .then(epoch => {
+            epochController.getNotifications()
+                .then(notifications => {
+                    io.emit('restartEpoch', epoch)
+                    io.emit('updateNotifications', notifications)
                 })
         })
 }
 
 
 
-schedule.scheduleJob('0 3 * * *', () => { epochStop() })
-schedule.scheduleJob('0 6 * * *', () => { epochStop() })
-schedule.scheduleJob('0 9 * * *', () => { epochStop() })
-schedule.scheduleJob('0 12 * * *', () => { epochStop() })
-schedule.scheduleJob('0 15 * * *', () => { epochStop() })
-schedule.scheduleJob('0 18 * * *', () => { epochStop() })
-schedule.scheduleJob('0 21 * * *', () => { epochStop() })
-schedule.scheduleJob('0 0 * * *', () => { epochStop() })
+schedule.scheduleJob('0 3 * * *', () => { restartEpochTrigger() })
+schedule.scheduleJob('0 6 * * *', () => { restartEpochTrigger() })
+schedule.scheduleJob('0 9 * * *', () => { restartEpochTrigger() })
+schedule.scheduleJob('0 12 * * *', () => { restartEpochTrigger() })
+schedule.scheduleJob('0 15 * * *', () => { restartEpochTrigger() })
+schedule.scheduleJob('0 18 * * *', () => { restartEpochTrigger() })
+schedule.scheduleJob('0 21 * * *', () => { restartEpochTrigger() })
+schedule.scheduleJob('0 0 * * *', () => { restartEpochTrigger() })
 
 
-schedule.scheduleJob('56 20 * * *', () => { epochStop() })
+schedule.scheduleJob('47 20 * * *', () => {restartEpochTrigger() })
 
 
 

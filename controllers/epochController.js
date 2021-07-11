@@ -1,6 +1,10 @@
 const Epoch = require('../models/EpochModel')
-const Reward = require('../models/RewardModel')
-const walletController = require('../controllers/walletController')
+const RewardV2 = require('../models/RewardModelV2')
+const ethWalletController = require('../controllers/ethWalletController')
+const Vote = require('../models/VoteModel')
+const EthWallet = require('../models/EthWalletModel')
+const Notification = require('../models/NotificationModel')
+const rewardController = require('../controllers/rewardController')
 
 exports.createNewEpoch = () => {
     return new Promise((resolve, reject) => {
@@ -41,8 +45,12 @@ exports.getCurrentEpoch = () => {
             .then(currentEpoch => {
                 this.calculateTimeLeft()
                     .then(timeLeft => {
-                        currentEpoch.set( 'timeLeft',timeLeft, { strict: false })
-                        resolve(currentEpoch);
+                        Epoch.find({})
+                            .then(epoches => {
+                                currentEpoch.set( 'number',epoches.length, { strict: false })
+                                currentEpoch.set( 'timeLeft',timeLeft, { strict: false })
+                                resolve(currentEpoch);
+                            })
                     })
                 
                 
@@ -51,274 +59,254 @@ exports.getCurrentEpoch = () => {
 }
 
 
-exports.voteForBlueTeam = (id, amount) => {
+exports.restartEpoch = () => {
     return new Promise((resolve, reject) => {
-
         Epoch.findOne({isActive:true})
             .then(currentEpoch => {
-                currentEpoch.blueTeamTotal = currentEpoch.blueTeamTotal + amount;
-                currentEpoch.save()
-                    .then(result => {
-                        this.saveBidToEpoch(id, amount, 'blue')
-                            .then(res => {
-                                walletController.setCurrentVoteTeam(id, 'blue')
-                                    .then(res2=>{
-                                        resolve(result)
-                                    })
-                                
-                            })
-                       
-                    })
-            })
-
-    })
-    
-}
-
-
-exports.voteForRedTeam = (id, amount) => {
-    return new Promise((resolve, reject) => {
-
-        Epoch.findOne({isActive:true})
-        .then(currentEpoch => {
-            currentEpoch.redTeamTotal = currentEpoch.redTeamTotal + amount;
-            currentEpoch.save()
-                .then(result => {
-                    this.saveBidToEpoch(id, amount, 'red')
-                            .then(res => {
-                                walletController.setCurrentVoteTeam(id, 'red')
-                                    .then(res2=>{
-                                        resolve(result)
-                                    })
-                            })
-                    })
-        })
-
-    })
-    
-}
-
-
-exports.chooseWinner = () => {
-    return new Promise((resolve, reject) => {
-        this.getCurrentEpoch()
-            .then(currentEpoch => {
-                if(currentEpoch.redTeamTotal > currentEpoch.blueTeamTotal){
-                    resolve('red')
-                }
-                if(currentEpoch.redTeamTotal < currentEpoch.blueTeamTotal){
-                    resolve('blue')
-                }
-
-                if(currentEpoch.redTeamTotal === currentEpoch.blueTeamTotal){
-                    resolve('same')
-                }
-            })
-    })
-}
-
-
-exports.saveBidToEpoch = (id, amount, team) => {
-    return new Promise((resolve, reject) => {
-        console.log(id);
-        this.getCurrentEpoch()
-            .then(currentEpoch => {
-                currentEpoch.votes.push({
-                    userId: id,
-                    amount,
-                    team
-                })
-                currentEpoch.save()
-                    .then(result2 => {
-                        resolve(result2);
-                    })
-            })
-    })
-}
-
-
-exports.getBidAmountForBlue = (id) => {
-    return new Promise((resolve, rejects) => {
-        this.getCurrentEpoch()
-            .then(currentEpoch => {
-                let obj = currentEpoch.votes.filter(obj=>obj.userId== id && obj.team == 'blue');
-                let totalAmount = 0;
-              
-               
-                obj.forEach(item => {
-                   
-                    totalAmount =  totalAmount + item.amount
-                });
+                const blueTeamAmount = currentEpoch.blueTeamTotal;
+                const redTeamAmount = currentEpoch.redTeamTotal;
                 
-                resolve(totalAmount);
-            })
-    })
-}
+                console.log(blueTeamAmount, redTeamAmount)
 
+                let winnerTeam;
+                let loserTeam;
+                let winnerAmount;
+                let loserAmount;
+                let blueTeamVotes = [];
+                let redTeamVotes = [];
 
-exports.getBidAmountForRed = (id) => {
-    return new Promise((resolve, rejects) => {
-       
-        this.getCurrentEpoch()
-            .then(currentEpoch => {
-                let obj = currentEpoch.votes.filter(obj=>obj.userId== id && obj.team == 'red');
-                let totalAmount = 0;
-             
-               
-                obj.forEach(item => {
-                   
-                    totalAmount =  totalAmount + item.amount
-                });
-                
-                resolve(totalAmount);
-            })
-    })
-}
-
-
-exports.returnWinnersBid = (winner) => {
-    return new Promise((resolve, reject) => {
-        this.getCurrentEpoch()
-            .then(currentEpoch => {
-                let winnerWallets = currentEpoch.votes.filter(obj => obj.team == winner);
-                winnerWallets.forEach(item => {
-
-                    const newReward = new Reward({
-                        userId: item.userId,
-                        amount: item.amount,
-                        coin: 'bnb',
-                    })
-
-                    newReward.save()
-                        .then(rewardSaved=> {
-                       
-                        })
-                   
-                })
-                resolve('bids returned');
-            })
-    })
-}
-
-
-exports.calculateEpochResults = (winner) => {
-    return new Promise((resolve, reject) => {
-
-        if(winner === 'same'){
-            resolve('ok')
-        }else{
-
-            this.getCurrentEpoch()
-            .then(currentEpoch => {
-                let winnerWallets = currentEpoch.votes.filter(obj => obj.team == winner);
-                let totalTeamWon;
-                if(winner === 'blue'){
-                    totalTeamWon = currentEpoch.redTeamTotal * 0.7;
-                    winnerWallets.forEach(item => {
-                        const teamCoef = item.amount / currentEpoch.blueTeamTotal;
-                        const winAmount = teamCoef * totalTeamWon;
-                       
-
-                        const newReward = new Reward({
-                            userId: item.userId,
-                            amount: winAmount,
-                            coin: 'bnb',
-                        })
-
-                        newReward.save()
-                            .then(rewardSaved=> {
-                           
-                            })
-
-                    })
-
-                    resolve('blue win')
-
-                }else if(winner === 'red'){
-                    totalTeamWon = currentEpoch.blueTeamTotal * 0.7;
-                    winnerWallets.forEach(item => {
-                        const teamCoef = item.amount / currentEpoch.redTeamTotal;
-                        const winAmount = teamCoef * totalTeamWon;
-                     
-
-
-                        const newReward = new Reward({
-                            userId: item.userId,
-                            amount: winAmount,
-                            coin: 'bnb',
-                        })
-
-                        newReward.save()
-                            .then(rewardSaved=> {
-                              
-                            })
-
-                    })
-
-                    resolve('red win')
+                if(blueTeamAmount > redTeamAmount ){
+                    winnerTeam = 'blue'
+                    winnerAmount = blueTeamAmount
+                    loserTeam = 'red'
+                    loserAmount = redTeamAmount
                 }
-            })
 
-        }
-
-
-      
-   
-   
-   
-   
-   
-        })
-}
+                if(blueTeamAmount < redTeamAmount ){
+                    winnerTeam = 'red'
+                    winnerAmount = redTeamAmount
+                    loserTeam = 'blue'
+                    loserAmount = blueTeamAmount
+                }
 
 
-exports.finishEpoch = () => {
-    return new Promise((resolve, reject) => {
-        this.chooseWinner()
-            .then(winner => {
+                if(blueTeamAmount === redTeamAmount ){
+                    winnerTeam = 'none'
+                    loserTeam = 'none'
+                }
 
+                console.log(winnerTeam, loserTeam)
+                console.log(winnerAmount, loserAmount)
 
-
-                this.returnWinnersBid(winner)
-                    .then(winnersBids => {
-                        this.calculateEpochResults(winner)
-                        .then(calculated => {
+                currentEpoch.isActive = false;
+                currentEpoch.save()
+                    .then(closedEpoch => {
+                        if(winnerTeam !== 'none'){
+                            Vote.find({
+                                epochId: closedEpoch._id,
+                                team: winnerTeam,
+                            })
     
-                            walletController.giveVersusToWallets()
-                                .then(versusRes => {
+                                .then(winnerVotes => {
     
-                                    this.stopCurrentEpoch()
-                                    .then(epoch => {
-                                        walletController.resetCurrentVoteTeam()
-                                            .then(res => {
-                                            
-                                                      
-                                                        resolve(winner);
-                                                    
-                                            
+                                    const profit = 0.7  * loserAmount
+
+                                        let totalVotesAmountOfWinnerTeam = 0;
+
+                                        winnerVotes.forEach(item => {
+                                            totalVotesAmountOfWinnerTeam = totalVotesAmountOfWinnerTeam + item.amount
+                                        })
+
+
+                                        const winnerLeftOverAmount = winnerAmount - totalVotesAmountOfWinnerTeam;
+
+    
+                                        winnerVotes.forEach(item => {
+                                            const coef = item.amount / totalVotesAmountOfWinnerTeam;
+                                            console.log(coef);
+                                            const walletProfit = coef * profit;
+                                            const returnAmount = (0.95 * walletProfit) + item.amount;
+                                            const leftOver = winnerLeftOverAmount * coef;
+    
+                                            const newReward = new RewardV2({
+                                                addr: item.addr,
+                                                amount: returnAmount + leftOver,
+                                                coin: 'bnb',
+                                                team: winnerTeam,
+                                                epochNumber:''
                                             })
-                                        
-                                    })
-        
-        
-                                })
-       
     
-                        })
+                                            newReward.save()
+                                                .then(rewardSaved => {
     
-                    })
-
-
+                                                    
+    
+                                                })
+    
+                                        })
+    
+    
+                                        const newEpoch = new Epoch({
+                                            redTeamTotal: 0.15 * loserAmount,
+                                            blueTeamTotal:  0.15 * loserAmount
+                                        });
+                                        newEpoch.save()
+                                            .then(newEpochCreated => {
+                                                this.getCurrentEpoch()
+                                                    .then(newCurrentEpoch => {
+                                                        EthWallet.updateMany({}, {"$set":{"currentVote": ""}})
+                                                            .then(res => {
+    
+    
+                                                                
+                                                                this.getEpochNumber()
+                                                                    .then(epochNumber => {
+                                                                        const newNotification = new Notification({
+                                                                            title: `Voting Zone #${epochNumber - 1}`,
+                                                                            text: `${winnerTeam} Team won ${profit.toFixed(2)} BNB in the Voting Zone #${epochNumber - 1}`
+                                                                        })
+                                            
             
+                                                                        newNotification.save()
+                                                                            .then(savedNotification => {
+            
+    
+                                                                                rewardController.giveVersusRewards(closedEpoch._id)
+                                                                                    .then(success => {
+                                                                                        resolve(newCurrentEpoch);
+                                                                                    })
+    
+                                                                            })
+                                                                    })
+    
+    
+                                                                
+    
+    
+    
+                                                            })         
+                                                    })
+                                            })
+    
+    
+                                    }
+                                )
+    
+                        }else{
 
-                
+                            //no votes equal balances
+
+                            const newEpoch = new Epoch({
+                                redTeamTotal: closedEpoch.redTeamTotal,
+                                blueTeamTotal: closedEpoch.blueTeamTotal
+                            });
+                            newEpoch.save()
+                                .then(newEpochCreated => {
+                                    this.getCurrentEpoch()
+                                        .then(newCurrentEpoch => {
+                                            EthWallet.updateMany({}, {"$set":{"currentVote": ""}})
+                                                .then(res => {
+                                                    resolve(newCurrentEpoch);
+                                                })   
+                                        })
+                                })
 
 
-
+                        }
+                    })
 
             })
     })
 }
+
+
+
+exports.createVote = (addr, amount, team) => {
+    return new Promise((resolve, reject) => {
+        Epoch.findOne({isActive: true})
+            .then(currentEpoch => {
+
+                if(team === 'blue'){
+                    currentEpoch.blueTeamTotal = currentEpoch.blueTeamTotal + amount
+                }
+
+                if(team === 'red'){
+                    currentEpoch.redTeamTotal = currentEpoch.redTeamTotal + amount
+                }
+
+
+                currentEpoch.save()
+                    .then(updatedEpoch => {
+
+                        Vote.findOne({addr: addr, team: team, epochId: updatedEpoch._id})
+                            .then(currentVote => {
+                                if(currentVote){
+
+                                    currentVote.amount = currentVote.amount + amount;
+                                        currentVote.save()
+                                            .then(updatedVote => {
+
+                                                EthWallet.findOne({addr: addr})
+                                                .then(wallet => {
+                                                    wallet.bnbAmount = wallet.bnbAmount - amount;
+                                                    wallet.totalVoted = wallet.totalVoted + amount;
+                                                    wallet.currentVote = team;
+            
+                                                    wallet.save()
+                                                        .then(updatedWallet => {
+                                                            this.getCurrentEpoch()
+                                                                .then(finalEpoch => {
+                                                                    resolve(finalEpoch)
+                                                                })
+                                                        })
+                                                })
+
+                                            })
+
+
+                                }else{
+                                    const newVote = new Vote({
+                                        addr: addr,
+                                        amount: amount,
+                                        team: team,
+                                        epochId: currentEpoch._id
+                                    })
+                    
+                                    newVote.save()
+                                        .then(voteSaved => {
+                                            EthWallet.findOne({addr: addr})
+                                                .then(wallet => {
+                                                    wallet.bnbAmount = wallet.bnbAmount - amount;
+                                                    wallet.totalVoted = wallet.totalVoted + amount;
+                                                    wallet.currentVote = team;
+            
+                                                    wallet.save()
+                                                        .then(updatedWallet => {
+                                                            this.getCurrentEpoch()
+                                                                .then(finalEpoch => {
+                                                                    resolve(finalEpoch)
+                                                                })
+                                                        })
+                                                })
+                                        })
+                                }
+                            })
+
+                    })
+
+            })
+    })
+}
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -375,50 +363,11 @@ exports.calculateTimeLeft = () => {
 }
 
 
-exports.transferLiquidityToNextEpoch = (lastWinner) => {
+exports.getNotifications = () => {
     return new Promise((resolve, reject) => {
-
-        if(lastWinner === 'same'){
-            resolve('ok')
-        }else{
-
-            Epoch.findOne({isActive: false}).sort({'_id': -1})
-            .then(lastEpoch => {
-                this.getCurrentEpoch()
-                    .then(currentEpoch => {
-
-                        
-                        if(lastWinner === 'blue'){
-                            currentEpoch.redTeamTotal = lastEpoch.redTeamTotal * 0.15;
-                            currentEpoch.blueTeamTotal = lastEpoch.redTeamTotal * 0.15;
-                        }
-
-                        if(lastWinner === 'red'){
-                            currentEpoch.redTeamTotal = lastEpoch.blueTeamTotal * 0.15;
-                            currentEpoch.blueTeamTotal = lastEpoch.blueTeamTotal * 0.15;
-                        }
-
-                        currentEpoch.save()
-                            .then(finalResult => {
-                                resolve(finalResult)
-                            })
-                        
-                    })
+        Notification.find({}).sort({'_id': -1}).limit(5)
+            .then(notifications => {
+                resolve(notifications);
             })
-
-        }
-
-
-        
-    
-    
-    
-    
-    
-    
-    
-    
-    
-        })
+    })
 }
-
