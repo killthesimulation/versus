@@ -26,7 +26,7 @@ mongoose.connect(db, { useNewUrlParser : true, useUnifiedTopology: true, useFind
 
 const io = require("socket.io")(server, {
     cors: {
-      origin: "http://localhost:3000",
+      origin: "https://beta.versus.farm",
       methods: ["GET", "POST"]
     }
   });
